@@ -62,7 +62,50 @@
           "type": "boolean",
           "description": "check for updates",
           "default": true
+        },
+        "uvls.check_semantic_analysis": {
+          "scope": "resource",
+          "type": "boolean",
+          "description": "semantic analysis checking",
+          "default": true
+        },
+        "uvls.check_void_model": {
+          "scope": "resource",
+          "type": "boolean",
+          "description": "void model checking",
+          "default": true
+        },
+        "uvls.check_core_feature": {
+          "scope": "resource",
+          "type": "boolean",
+          "description": "core feature checking",
+          "default": true
+        },
+        "uvls.check_dead_feature": {
+          "scope": "resource",
+          "type": "boolean",
+          "description": "dead feature checking",
+          "default": true
+        },
+        "uvls.check_false_optional": {
+          "scope": "resource",
+          "type": "boolean",
+          "description": "false optional checking",
+          "default": true
+        },
+        "uvls.check_tautology_constraint": {
+          "scope": "resource",
+          "type": "boolean",
+          "description": "tautology constraint checking",
+          "default": true
+        },
+        "uvls.check_contradiction_constraint": {
+          "scope": "resource",
+          "type": "boolean",
+          "description": "contradiction constraint checking",
+          "default": true
         }
+
       }
     }
   },

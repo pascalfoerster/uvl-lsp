@@ -5,8 +5,10 @@ use flexi_logger::FileSpec;
 use get_port::Ops;
 
 use serde::Serialize;
+use serde_json::Value;
 use tokio::{join, spawn};
 use log::info;
+use tower_lsp::lsp_types::request::WorkspaceConfiguration;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -213,7 +215,13 @@ impl LanguageServer for Backend {
             })
             .ok(),
         };
-        if self.client.register_capability(vec![reg]).await.is_err() {
+
+        let config = Registration {
+            id: "configuration".to_string(),
+            method: "workspace/didChangeConfiguration".to_string(),
+            register_options: None
+        };
+        if self.client.register_capability(vec![reg,config]).await.is_err() {
             info!("failed to initialize file watchers");
         }
     }
@@ -339,6 +347,13 @@ impl LanguageServer for Backend {
                 _ => {}
             }
         }
+    }
+    async fn did_change_configuration(&self, params: DidChangeConfigurationParams){
+        info!("config change {:?}", params);
+        let temp = self.client.send_request::<request::WorkspaceConfiguration>(ConfigurationParams {
+            items: vec![ConfigurationItem {scope_uri: Url::parse("uvls").ok(), section:Some("path".to_string())}]
+        }).await;
+        info!("config change {:?}", temp);
     }
     async fn execute_command(
         &self,
