@@ -1,7 +1,7 @@
 use crate::{
     core::*,
     ide::inlays::{InlayHandler, InlaySource},
-    webview,
+    webview, SEMANTIC_SETTINGS,
 };
 use futures::future::join_all;
 use hashbrown::{HashMap, HashSet};
@@ -25,8 +25,8 @@ use tokio::{
 
 use tokio_util::sync::CancellationToken;
 use tower_lsp::lsp_types::*;
-pub mod smt_lib;
 mod parse;
+pub mod smt_lib;
 pub use smt_lib::*;
 
 //SMT semantic analysis with Z3, communication with the solver happens over stdio and SMT-LIB2.
@@ -230,7 +230,7 @@ async fn find_fixed(
                 });
             let values = solve.values(unknown).await?;
             //info!("model {:?}", time.elapsed());
-            for (s, v) in module.parse_values(&values,base_module) {
+            for (s, v) in module.parse_values(&values, base_module) {
                 if let Some(old) = state.get(&s) {
                     match (v, old) {
                         (ConfigValue::Bool(true), SMTValueState::Off) => {
@@ -260,26 +260,21 @@ async fn create_model(
 ) -> Result<SMTModel> {
     let time = Instant::now();
     let mut solver = SmtSolver::new(source, &cancel).await?;
-    info!("create model: {:?}",time.elapsed());
+    info!("create model: {:?}", time.elapsed());
     if solver.check_sat().await? {
-
         let values = if value | fixed {
-
             let query = module
                 .variables
                 .iter()
                 .enumerate()
                 .fold(String::new(), |acc, (i, _)| format!("{acc} v{i}"));
-            
 
             let values = solver.values(query).await?;
 
-
             let time = Instant::now();
-            let values = module.parse_values(&values,base_module).collect();
-            info!("parse values: {:?}",time.elapsed());
+            let values = module.parse_values(&values, base_module).collect();
+            info!("parse values: {:?}", time.elapsed());
             values
-
         } else {
             HashMap::new()
         };
@@ -347,9 +342,13 @@ async fn check_base_sat(
                             if let Some(val) = fixed.get(&m.sym(sym)) {
                                 match val {
                                     SMTValueState::Off => {
-                                        if visited.insert((sym, file.id)) {
-                                            e.sym_info(sym, file.id, 10, "dead feature");
-                                        }
+                                        if SEMANTIC_SETTINGS.try_lock().unwrap().check_dead_feature
+                                        {
+                                            if visited.insert((sym, file.id)) {
+                                                e.sym_info(sym, file.id, 10, "dead feature");
+                                            }
+                                        };
+
                                         false
                                     }
                                     SMTValueState::On => {

@@ -2,13 +2,16 @@
 #![forbid(unsafe_code)]
 
 use flexi_logger::FileSpec;
+use futures_util::lock::Mutex;
 use get_port::Ops;
 
+use lazy_static::lazy_static;
 use log::info;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;
 use std::io::Read;
+use std::mem;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::SystemTime;
@@ -28,35 +31,36 @@ struct Settings {
     //can the client show websites on its own
     //ie client==vscode
     has_webview: bool,
-    semantic_settings: SemanticSettings,
 }
 impl Default for Settings {
     fn default() -> Self {
-        Settings {
-            has_webview: false,
-            semantic_settings: SemanticSettings {
-                check_semantic_analysis: (true),
-                check_void_model: (true),
-                check_core_feature: (true),
-                check_dead_feature: (true),
-                check_false_optional: (true),
-                check_tautology_constraint: (true),
-                check_contradiction_constraint: (true),
-            },
-        }
+        Settings { has_webview: false }
     }
 }
 
 #[derive(Deserialize, Debug)]
-struct SemanticSettings {
-    check_semantic_analysis: bool,
-    check_void_model: bool,
-    check_core_feature: bool,
-    check_dead_feature: bool,
-    check_false_optional: bool,
-    check_tautology_constraint: bool,
-    check_contradiction_constraint: bool,
+pub struct SemanticSettings {
+    pub check_semantic_analysis: bool,
+    pub check_void_model: bool,
+    pub check_core_feature: bool,
+    pub check_dead_feature: bool,
+    pub check_false_optional: bool,
+    pub check_tautology_constraint: bool,
+    pub check_contradiction_constraint: bool,
 }
+
+lazy_static! {
+    pub static ref SEMANTIC_SETTINGS: Mutex<SemanticSettings> = Mutex::new(SemanticSettings {
+        check_semantic_analysis: (true),
+        check_void_model: (true),
+        check_core_feature: (true),
+        check_dead_feature: (true),
+        check_false_optional: (true),
+        check_tautology_constraint: (true),
+        check_contradiction_constraint: (true),
+    });
+}
+
 //The LSP
 struct Backend {
     client: Client,
@@ -390,9 +394,10 @@ impl LanguageServer for Backend {
                 }],
             })
             .await;
-        let config: SemanticSettings = serde_json::from_value(temp.unwrap().get(0).unwrap().clone()).unwrap();
-        self.settings.lock().semantic_settings = config;
-        info!("config change {:?}",self.settings.lock());
+        let config: SemanticSettings =
+            serde_json::from_value(temp.unwrap().get(0).unwrap().clone()).unwrap();
+        *SEMANTIC_SETTINGS.lock().await = config;
+        info!("config change {:?}", *SEMANTIC_SETTINGS.lock().await);
     }
     async fn execute_command(
         &self,
