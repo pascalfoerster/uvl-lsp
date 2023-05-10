@@ -4,16 +4,17 @@
 use flexi_logger::FileSpec;
 use get_port::Ops;
 
+use log::info;
+use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;
-use tokio::{join, spawn};
-use log::info;
-use tower_lsp::lsp_types::request::WorkspaceConfiguration;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::SystemTime;
+use tokio::{join, spawn};
 use tower_lsp::jsonrpc::Result;
+use tower_lsp::lsp_types::request::WorkspaceConfiguration;
 use tower_lsp::lsp_types::*;
 use tower_lsp::{Client, LanguageServer, LspService, Server};
 mod core;
@@ -21,15 +22,40 @@ mod ide;
 mod smt;
 mod webview;
 use crate::core::*;
+
+#[derive(Debug)]
 struct Settings {
     //can the client show websites on its own
     //ie client==vscode
     has_webview: bool,
+    semantic_settings: SemanticSettings,
 }
 impl Default for Settings {
     fn default() -> Self {
-        Settings { has_webview: false }
+        Settings {
+            has_webview: false,
+            semantic_settings: SemanticSettings {
+                check_semantic_analysis: (true),
+                check_void_model: (true),
+                check_core_feature: (true),
+                check_dead_feature: (true),
+                check_false_optional: (true),
+                check_tautology_constraint: (true),
+                check_contradiction_constraint: (true),
+            },
+        }
     }
+}
+
+#[derive(Deserialize, Debug)]
+struct SemanticSettings {
+    check_semantic_analysis: bool,
+    check_void_model: bool,
+    check_core_feature: bool,
+    check_dead_feature: bool,
+    check_false_optional: bool,
+    check_tautology_constraint: bool,
+    check_contradiction_constraint: bool,
 }
 //The LSP
 struct Backend {
@@ -219,9 +245,14 @@ impl LanguageServer for Backend {
         let config = Registration {
             id: "configuration".to_string(),
             method: "workspace/didChangeConfiguration".to_string(),
-            register_options: None
+            register_options: None,
         };
-        if self.client.register_capability(vec![reg,config]).await.is_err() {
+        if self
+            .client
+            .register_capability(vec![reg, config])
+            .await
+            .is_err()
+        {
             info!("failed to initialize file watchers");
         }
     }
@@ -348,12 +379,20 @@ impl LanguageServer for Backend {
             }
         }
     }
-    async fn did_change_configuration(&self, params: DidChangeConfigurationParams){
+    async fn did_change_configuration(&self, params: DidChangeConfigurationParams) {
         info!("config change {:?}", params);
-        let temp = self.client.send_request::<request::WorkspaceConfiguration>(ConfigurationParams {
-            items: vec![ConfigurationItem {scope_uri: Url::parse("uvls").ok(), section:Some("path".to_string())}]
-        }).await;
-        info!("config change {:?}", temp);
+        let temp = self
+            .client
+            .send_request::<request::WorkspaceConfiguration>(ConfigurationParams {
+                items: vec![ConfigurationItem {
+                    scope_uri: Url::parse("").ok(),
+                    section: Some("uvls".to_string()),
+                }],
+            })
+            .await;
+        let config: SemanticSettings = serde_json::from_value(temp.unwrap().get(0).unwrap().clone()).unwrap();
+        self.settings.lock().semantic_settings = config;
+        info!("config change {:?}",self.settings.lock());
     }
     async fn execute_command(
         &self,
@@ -426,12 +465,9 @@ impl LanguageServer for Backend {
                             character: 0,
                         },
                     },
-                    command: if self
-                        .pipeline
-                        .inlay_state()
-                        .is_active(ide::inlays::InlaySource::File(semantic::FileID::new(
-                            uri.as_str(),
-                        ))) {
+                    command: if self.pipeline.inlay_state().is_active(
+                        ide::inlays::InlaySource::File(semantic::FileID::new(uri.as_str())),
+                    ) {
                         Some(Command {
                             title: "hide".into(),
                             command: "uvls/hide_config".into(),
@@ -502,12 +538,11 @@ fn main() {
 }
 async fn server_main() {
     std::env::set_var("RUST_BACKTRACE", "1");
-    
+
     log_panics::Config::new()
         .backtrace_mode(log_panics::BacktraceMode::Unresolved)
         .install_panic_hook();
 
-    
     let stdin = tokio::io::stdin();
     let stdout = tokio::io::stdout();
     //only needed for vscode auto update
