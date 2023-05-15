@@ -384,8 +384,8 @@ impl LanguageServer for Backend {
         }
     }
     async fn did_change_configuration(&self, params: DidChangeConfigurationParams) {
-        info!("config change {:?}", params);
-        let temp = self
+        // load configuration
+        let configuration_result = self
             .client
             .send_request::<request::WorkspaceConfiguration>(ConfigurationParams {
                 items: vec![ConfigurationItem {
@@ -394,10 +394,9 @@ impl LanguageServer for Backend {
                 }],
             })
             .await;
-        let config: SemanticSettings =
-            serde_json::from_value(temp.unwrap().get(0).unwrap().clone()).unwrap();
-        *SEMANTIC_SETTINGS.lock().await = config;
-        info!("config change {:?}", *SEMANTIC_SETTINGS.lock().await);
+        // store new config in Settings
+        *SEMANTIC_SETTINGS.lock().await =
+            serde_json::from_value(configuration_result.unwrap().get(0).unwrap().clone()).unwrap();
     }
     async fn execute_command(
         &self,
