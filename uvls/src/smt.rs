@@ -183,6 +183,7 @@ async fn find_fixed(
     base_module: &Module,
     module: &SMTModule,
     initial_model: impl Iterator<Item = (ModuleSymbol, ConfigValue)>,
+    cancel: CancellationToken,
 ) -> Result<HashMap<ModuleSymbol, SMTValueState>> {
     let mut state = HashMap::new();
     for (s, v) in initial_model {
@@ -243,11 +244,39 @@ async fn find_fixed(
                     }
                 }
             }
-
-            //info!("parse {:?}", time.elapsed());
         }
         solve.push("(pop 1)".into()).await?;
     }
+    //check if a constraint is a tautologie
+
+    // load in the module all variable and all constraints as Asserts
+    let smt_module_constraint = uvl2smt_constraints(&base_module);
+    // create source for smtsolver, but only with the variable
+    let mut source_variable = smt_module_constraint.config_to_source();
+    let _ = writeln!(
+        source_variable,
+        "{}",
+        smt_module_constraint.variable_to_source(&base_module)
+    );
+    //create SMTSolver for the constraints
+    let mut solver_constraint = SmtSolver::new(source_variable, &cancel).await?;
+    for (i, Assert(info, expr)) in smt_module_constraint.asserts.iter().enumerate() {
+        //get the negated constraint source
+        let constraint_assert = smt_module_constraint.assert_to_source(i, info, expr, true);
+        //push negated constraint
+        solver_constraint
+            .push(format!("(push 1) {}", constraint_assert))
+            .await?;
+        //check if negated constraint is unsat
+        let sat = solver_constraint.check_sat().await?;
+        if !sat {
+            let module_symbol = info.clone().unwrap().0;
+            state.insert(module_symbol, SMTValueState::On);
+        }
+        //pop negated constraint
+        solver_constraint.push("(pop 1)".into()).await?;
+    }
+
     Ok(state)
 }
 async fn create_model(
@@ -285,6 +314,7 @@ async fn create_model(
                     base_module,
                     &module,
                     values.iter().map(|(k, v)| (*k, v.clone())),
+                    cancel,
                 )
                 .await?
             } else {
@@ -362,15 +392,36 @@ async fn check_base_sat(
                             }
                         }
                         Symbol::Group(..) => true,
+                        Symbol::Constraint(..) => {
+                            if let Some(val) = fixed.get(&m.sym(sym)) {
+                                match val {
+                                    SMTValueState::On => {
+                                        if visited.insert((sym, file.id)) {
+                                            e.sym_info(sym, file.id, 10, "TAUT: constraint");
+                                        }
+                                        false
+                                    }
+                                    _ => true,
+                                }
+                            } else {
+                                true
+                            }
+                        }
                         _ => false,
                     })
                 }
             }
             Ok((SMTModel::UNSAT { reasons }, module)) => {
                 let mut visited = HashSet::new();
+                let mut void_is_marked = false;
                 for r in reasons {
                     let file = module.file(r.0.instance).id;
-
+                    if !void_is_marked {
+                        // works only if keyword feature is the only keyword stored in the Keyword vector in the AST, but since I see no reason 
+                        // why another keyword is needed in the green tree, so the features keyword would always have id 0.
+                        e.sym(Symbol::Keyword(0), file, 12, "void feature model");
+                        void_is_marked = true;
+                    }
                     if visited.insert((r.0.sym, file)) {
                         e.sym(r.0.sym, file, 12, format!("UNSAT: {}", r.1))
                     }

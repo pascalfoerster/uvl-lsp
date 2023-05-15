@@ -76,6 +76,7 @@ pub enum Cardinality {
 pub enum LanguageLevelMajor {
     SAT,
     SMT,
+    TYPE,
 }
 #[derive(Clone, Debug, PartialEq)]
 pub enum LanguageLevelSMT {
@@ -88,10 +89,17 @@ pub enum LanguageLevelSAT {
     Any,
     GroupCardinality,
 }
+#[derive(Clone, Debug, PartialEq)]
+pub enum LanguageLevelTYPE {
+    Any,
+    NumericConstraints,
+    StringConstraints,
+}
 #[derive(Clone, Debug)]
 pub enum LanguageLevel {
     SAT(Vec<LanguageLevelSAT>),
     SMT(Vec<LanguageLevelSMT>),
+    TYPE(Vec<LanguageLevelTYPE>),
 }
 
 #[derive(Clone, Debug)]
@@ -128,6 +136,11 @@ pub struct Attribute {
     pub name: SymbolSpan,
     pub value: ValueDecl,
     pub depth: u32,
+}
+#[derive(Clone, Debug)]
+pub struct Keyword {
+    pub name: Ustr,
+    pub span: Span,
 }
 #[derive(Clone, Debug)]
 pub struct Dir {
@@ -190,6 +203,12 @@ pub enum AggregateOP {
     Sum,
 }
 
+#[derive(Clone, Debug)]
+pub enum IntegerOP {
+    Floor,
+    Ceil,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum EquationOP {
     Greater,
@@ -236,6 +255,10 @@ pub enum Expr {
         context: Option<Symbol>,
         query: Path,
     },
+    Integer {
+        op: IntegerOP,
+        n: Box<ExprDecl>,
+    },
     Len(Box<ExprDecl>),
 }
 #[derive(Clone, Debug)]
@@ -247,6 +270,7 @@ pub struct ExprDecl {
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, enum_kinds::EnumKind)]
 #[enum_kind(SymbolKind, derive(Hash))]
 pub enum Symbol {
+    Keyword(usize),
     Feature(usize),
     Constraint(usize),
     Attribute(usize),
