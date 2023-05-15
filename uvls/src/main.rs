@@ -11,13 +11,11 @@ use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;
 use std::io::Read;
-use std::mem;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::SystemTime;
 use tokio::{join, spawn};
 use tower_lsp::jsonrpc::Result;
-use tower_lsp::lsp_types::request::WorkspaceConfiguration;
 use tower_lsp::lsp_types::*;
 use tower_lsp::{Client, LanguageServer, LspService, Server};
 mod core;
@@ -59,6 +57,7 @@ lazy_static! {
         check_tautology_constraint: (true),
         check_contradiction_constraint: (true),
     });
+    pub static ref OPEN_FILES: Mutex<Vec<Url>> = Mutex::new(Vec::new());
 }
 
 //The LSP
@@ -269,6 +268,10 @@ impl LanguageServer for Backend {
     }
     async fn did_open(&self, params: DidOpenTextDocumentParams) {
         info!("received did_open {:?}", params.text_document.uri);
+        OPEN_FILES
+            .lock()
+            .await
+            .push(params.clone().text_document.uri);
         self.pipeline.open(
             params.text_document.uri,
             params.text_document.text,
@@ -370,6 +373,7 @@ impl LanguageServer for Backend {
             .delete(&params.text_document.uri, DocumentState::OwnedByEditor)
             .await;
         self.load(params.text_document.uri);
+        // Todo remove from OPEN_FILES
     }
     async fn did_change_watched_files(&self, params: DidChangeWatchedFilesParams) {
         info!("file change {:?}", params);
@@ -407,6 +411,10 @@ impl LanguageServer for Backend {
                 *SEMANTIC_SETTINGS.lock().await =
                     serde_json::from_value(result.get(0).unwrap().clone()).unwrap();
                 info!("New Configuration{:?}", SEMANTIC_SETTINGS.lock().await);
+                // reload open files
+                for url in OPEN_FILES.lock().await.iter() {
+                    self.pipeline.touch(url)
+                }
             }
             Err(error) => info!("ERROR: {:?}", error),
         }
