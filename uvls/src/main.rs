@@ -251,6 +251,13 @@ impl LanguageServer for Backend {
             method: "workspace/didChangeConfiguration".to_string(),
             register_options: None,
         };
+
+        // Load IDE Settings
+        self.did_change_configuration(DidChangeConfigurationParams {
+            settings: Value::Null,
+        })
+        .await;
+
         if self
             .client
             .register_capability(vec![reg, config])
@@ -383,9 +390,9 @@ impl LanguageServer for Backend {
             }
         }
     }
-    async fn did_change_configuration(&self, params: DidChangeConfigurationParams) {
+    async fn did_change_configuration(&self, _params: DidChangeConfigurationParams) {
         // load configuration
-        let configuration_result = self
+        match self
             .client
             .send_request::<request::WorkspaceConfiguration>(ConfigurationParams {
                 items: vec![ConfigurationItem {
@@ -393,10 +400,16 @@ impl LanguageServer for Backend {
                     section: Some("uvls".to_string()),
                 }],
             })
-            .await;
-        // store new config in Settings
-        *SEMANTIC_SETTINGS.lock().await =
-            serde_json::from_value(configuration_result.unwrap().get(0).unwrap().clone()).unwrap();
+            .await
+        {
+            Ok(result) => {
+                // store new config in Settings
+                *SEMANTIC_SETTINGS.lock().await =
+                    serde_json::from_value(result.get(0).unwrap().clone()).unwrap();
+                info!("New Configuration{:?}", SEMANTIC_SETTINGS.lock().await);
+            }
+            Err(error) => info!("ERROR: {:?}", error),
+        }
     }
     async fn execute_command(
         &self,
