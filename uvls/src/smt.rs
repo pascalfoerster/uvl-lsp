@@ -248,35 +248,39 @@ async fn find_fixed(
         solve.push("(pop 1)".into()).await?;
     }
     //check if a constraint is a tautologie
-
-    // load in the module all variable and all constraints as Asserts
-    let smt_module_constraint = uvl2smt_constraints(&base_module);
-    // create source for smtsolver, but only with the variable
-    let mut source_variable = smt_module_constraint.config_to_source();
-    let _ = writeln!(
-        source_variable,
-        "{}",
-        smt_module_constraint.variable_to_source(&base_module)
-    );
-    //create SMTSolver for the constraints
-    let mut solver_constraint = SmtSolver::new(source_variable, &cancel).await?;
-    for (i, Assert(info, expr)) in smt_module_constraint.asserts.iter().enumerate() {
-        //get the negated constraint source
-        let constraint_assert = smt_module_constraint.assert_to_source(i, info, expr, true);
-        //push negated constraint
-        solver_constraint
-            .push(format!("(push 1) {}", constraint_assert))
-            .await?;
-        //check if negated constraint is unsat
-        let sat = solver_constraint.check_sat().await?;
-        if !sat {
-            let module_symbol = info.clone().unwrap().0;
-            state.insert(module_symbol, SMTValueState::On);
+    if SEMANTIC_SETTINGS
+        .try_lock()
+        .unwrap()
+        .check_tautology_constraint
+    {
+        // load in the module all variable and all constraints as Asserts
+        let smt_module_constraint = uvl2smt_constraints(&base_module);
+        // create source for smtsolver, but only with the variable
+        let mut source_variable = smt_module_constraint.config_to_source();
+        let _ = writeln!(
+            source_variable,
+            "{}",
+            smt_module_constraint.variable_to_source(&base_module)
+        );
+        //create SMTSolver for the constraints
+        let mut solver_constraint = SmtSolver::new(source_variable, &cancel).await?;
+        for (i, Assert(info, expr)) in smt_module_constraint.asserts.iter().enumerate() {
+            //get the negated constraint source
+            let constraint_assert = smt_module_constraint.assert_to_source(i, info, expr, true);
+            //push negated constraint
+            solver_constraint
+                .push(format!("(push 1) {}", constraint_assert))
+                .await?;
+            //check if negated constraint is unsat
+            let sat = solver_constraint.check_sat().await?;
+            if !sat {
+                let module_symbol = info.clone().unwrap().0;
+                state.insert(module_symbol, SMTValueState::On);
+            }
+            //pop negated constraint
+            solver_constraint.push("(pop 1)".into()).await?;
         }
-        //pop negated constraint
-        solver_constraint.push("(pop 1)".into()).await?;
     }
-
     Ok(state)
 }
 async fn create_model(
@@ -416,14 +420,19 @@ async fn check_base_sat(
                 let mut void_is_marked = false;
                 for r in reasons {
                     let file = module.file(r.0.instance).id;
-                    if !void_is_marked &  SEMANTIC_SETTINGS.try_lock().unwrap().check_void_model {
-                        // works only if keyword feature is the only keyword stored in the Keyword vector in the AST, but since I see no reason 
+                    if !void_is_marked & SEMANTIC_SETTINGS.try_lock().unwrap().check_void_model {
+                        // works only if keyword feature is the only keyword stored in the Keyword vector in the AST, but since I see no reason
                         // why another keyword is needed in the green tree, so the features keyword would always have id 0.
                         e.sym(Symbol::Keyword(0), file, 12, "void feature model");
                         void_is_marked = true;
                     }
                     if visited.insert((r.0.sym, file)) {
-                        if !(r.1.to_string() == "constraint" && !SEMANTIC_SETTINGS.try_lock().unwrap().check_contradiction_constraint){
+                        if !(r.1.to_string() == "constraint"
+                            && !SEMANTIC_SETTINGS
+                                .try_lock()
+                                .unwrap()
+                                .check_contradiction_constraint)
+                        {
                             e.sym(r.0.sym, file, 12, format!("UNSAT: {}", r.1))
                         }
                     }
@@ -565,11 +574,17 @@ pub async fn check_handler(
     let mut latest_versions: HashMap<FileID, Instant> = HashMap::new();
     let mut latest_versions_config: HashMap<FileID, Instant> = HashMap::new();
     loop {
-        info!("Check SMT");
-        let root = rx_root.borrow_and_update().clone();
-        latest_versions = check_base_sat(&root, &tx_err, latest_versions).await;
-        latest_versions_config =
-            check_config(&root, &tx_err, &inlay_state, latest_versions_config).await;
+        if SEMANTIC_SETTINGS
+            .try_lock()
+            .unwrap()
+            .check_semantic_analysis
+        {   
+            info!("Check SMT");
+            let root = rx_root.borrow_and_update().clone();
+            latest_versions = check_base_sat(&root, &tx_err, latest_versions).await;
+            latest_versions_config =
+                check_config(&root, &tx_err, &inlay_state, latest_versions_config).await;
+        }
         if rx_root.changed().await.is_err() {
             break;
         }
