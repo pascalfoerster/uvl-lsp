@@ -1,0 +1,10 @@
+features
+    Feature1 // Definition of Feature1
+    Feature2 {attr true} // Definition of Feature1.attr
+    F3
+        
+constraints
+    Feature1 // Reference of Feature1
+    Feature2.attr // Reference of Attribute of Feature2
+    Feature1 // Reference of Feature1
+    

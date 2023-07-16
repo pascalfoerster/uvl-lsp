@@ -1,0 +1,33 @@
+namespace bike_uvl
+
+include
+    Boolean.*
+    Arithmetic.*
+    Type.*
+
+features
+    Bike
+        mandatory
+            Brake {Weight 3}
+            String Manufacturer
+            Integer Inch
+        optional
+            Bell cardinality [1..2] {Weight 1}
+                [1..4]
+                    Test1
+                    Test2
+                mandatory
+                    Test3
+            "Training Wheels" {Manufacturer 'Wheelio'}
+            "Light System"
+            String TestString
+                or
+                    Front {Weight 2}
+                    Back {Weight 1.5}
+            Dynamo {Weight 3}
+constraints
+    len(TestString) == 1
+    ceil(Back.Weight) == 2 & floor(Back.Weight) == 2 => Test1
+    avg(Weight) < 3 & sum(Weight) < 9
+    len("Training Wheels".Manufacturer) == len('1234567')
+    !("Training Wheels".Manufacturer == '1234567')

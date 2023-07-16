@@ -190,6 +190,7 @@ pub fn estimate_expr(node: Node, pos: &Position, source: &Rope) -> CompletionEnv
             || err_raw.contains("<=>")
             || err_raw.contains('&')
             || err_raw.contains('|')
+            || err_raw.contains('!')
         {
             return CompletionEnv::Constraint;
         }
@@ -256,7 +257,7 @@ pub fn estimate_expr(node: Node, pos: &Position, source: &Rope) -> CompletionEnv
                 .byte_slice(node.child_by_field_name("op").unwrap().byte_range())
                 .into();
             match op.as_str() {
-                "=>" | "&" | "|" | "<=>" => CompletionEnv::Constraint,
+                "=>" | "&" | "|" | "<=>" | "!" => CompletionEnv::Constraint,
                 _ => CompletionEnv::Numeric,
             }
         }
@@ -664,6 +665,7 @@ fn add_logic_op(query: &str, top: &mut TopN<CompletionOpt>, w: f32) {
             ">".into(),
             "<".into(),
             "==".into(),
+            "!".into()
         ],
     );
 }

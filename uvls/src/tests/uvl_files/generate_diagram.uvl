@@ -1,0 +1,14 @@
+features
+    Feature1
+        mandatory
+            Feature2 {attr true}
+        optional
+            Feature3
+                alternative
+                    Feature4
+                or
+                    Feature5
+constraints
+    Feature1
+    Feature2.attr
+    Feature1

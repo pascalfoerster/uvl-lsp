@@ -394,8 +394,8 @@ impl LanguageServer for Backend {
             "uvls/generate_diagram" => {
                 let root_fileid = FileID::from_uri(&Url::parse(uri.as_str()).unwrap());
                 let root_graph = self.pipeline.root().borrow_and_update().clone();
-                if !root_graph.contains_id(root_fileid){{}}
-                
+                if !root_graph.contains_id(root_fileid){return Ok(None);}
+
                 let document = root_graph.files.get(&root_fileid).unwrap();
                 let g = ast::graph::Graph::new(document.source.clone(), document.tree.clone(), uri.clone());
 
@@ -614,3 +614,6 @@ async fn server_main() {
     });
     join!(Server::new(stdin, stdout, socket).serve(service));
 }
+
+#[cfg(test)]
+mod tests;
