@@ -5,15 +5,13 @@ use flexi_logger::FileSpec;
 use futures_util::lock::Mutex;
 use get_port::Ops;
 
-use log::info;
-use percent_encoding::percent_decode_str;
 use lazy_static::lazy_static;
 use log::info;
+use percent_encoding::percent_decode_str;
 use serde::Deserialize;
 use serde::Serialize;
-use std::io::{Read, Write};
 use serde_json::Value;
-use std::io::Read;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::SystemTime;
@@ -565,9 +563,6 @@ impl LanguageServer for Backend {
                             character: 0,
                         },
                     },
-                    command: if self.pipeline.inlay_state().is_active(
-                        ide::inlays::InlaySource::File(semantic::FileID::new(uri.as_str())),
-                    ) {
                     command: if self.pipeline.inlay_state().is_active(
                         ide::inlays::InlaySource::File(semantic::FileID::new(uri.as_str())),
                     ) {
