@@ -220,10 +220,6 @@
         },
         {
           "type": "SYMBOL",
-          "name": "typed_feature"
-        },
-        {
-          "type": "SYMBOL",
           "name": "incomplete_namespace"
         },
         {
@@ -240,7 +236,7 @@
           "name": "type",
           "content": {
             "type": "SYMBOL",
-            "name": "_any_name"
+            "name": "type"
           }
         },
         {
@@ -1415,15 +1411,15 @@
       "members": [
         {
           "type": "STRING",
-          "value": "SMT-level"
+          "value": "Boolean"
         },
         {
           "type": "STRING",
-          "value": "SAT-level"
+          "value": "Arithmetic"
         },
         {
           "type": "STRING",
-          "value": "TYPE-level"
+          "value": "Type"
         }
       ]
     },
@@ -1478,6 +1474,10 @@
         {
           "type": "STRING",
           "value": "String"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "_any_name"
         }
       ]
     },

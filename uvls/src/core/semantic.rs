@@ -2,6 +2,7 @@ use crate::core::*;
 
 use hashbrown::{HashMap, HashSet};
 use log::info;
+use percent_encoding::percent_decode_str;
 use std::fmt::Debug;
 use std::sync::Arc;
 use tokio::time::Instant;
@@ -15,7 +16,7 @@ pub struct FileID(Ustr);
 impl FileID {
     pub fn new(i: &str) -> Self {
         assert!(i != "");
-        Self(i.into())
+        Self((percent_decode_str(i).decode_utf8().unwrap().into_owned()[..]).into())
     }
     pub fn from_uri(uri: &Url) -> FileID {
         Self::new(uri.as_str())
@@ -29,7 +30,6 @@ impl FileID {
     pub fn is_virtual(&self) -> bool {
         self.0.as_str().ends_with(".VIRTUAL_CONFIG")
     }
-
     pub fn is_config(&self) -> bool {
         self.0.as_str().ends_with(".json") | self.is_virtual()
     }
@@ -193,7 +193,6 @@ impl RootGraph {
             let mut file_paths = HashSet::new();
             for file in files.values() {
                 if !file_paths.insert(file.path.as_slice()) {
-                    //info!("{:?}", file.namespace());
                     if let Some(ns) = file.namespace() {
                         if err.errors.contains_key(&file.id) {
                             err.span(ns.range(), file.id, 100, "namespace already defined");
@@ -202,7 +201,6 @@ impl RootGraph {
                 }
             }
         }
-        //info!("dirty {:?}",dirty);
         Self {
             cancel: CancellationToken::new(),
             cache: Cache::new(old, files, configs, &dirty, revision, err),

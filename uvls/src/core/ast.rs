@@ -1,6 +1,7 @@
 use crate::core::*;
 use check::ErrorInfo;
 use hashbrown::HashMap;
+use itertools::Itertools;
 use ropey::Rope;
 use semantic::FileID;
 use std::hash::Hash;
@@ -10,7 +11,9 @@ use tower_lsp::lsp_types::Url;
 use tree_sitter::Tree;
 use ustr::Ustr;
 use util::lsp_range;
+pub mod collapse;
 mod def;
+pub mod graph;
 mod transform;
 mod visitor;
 pub use def::*;
@@ -175,8 +178,32 @@ impl Ast {
     fn all_features(&self) -> impl Iterator<Item = Symbol> {
         (0..self.features.len()).map(Symbol::Feature)
     }
+    fn get_feature(&self, index: usize) -> Option<&Feature> {
+        self.features.get(index)
+    }
+    fn containe_feature(&self, name: Ustr) -> bool {
+        for feature in self.features.clone() {
+            if feature.name.name == name {
+                return true;
+            }
+        }
+
+        false
+    }
+    fn get_attribute(&self, index: usize) -> Option<&Attribute> {
+        self.attributes.get(index)
+    }
     fn all_attributes(&self) -> impl Iterator<Item = Symbol> {
         (0..self.attributes.len()).map(Symbol::Attribute)
+    }
+    fn containe_attribute(&self, name: Ustr) -> bool {
+        for attribute in self.attributes.clone() {
+            if attribute.name.name == name {
+                return true;
+            }
+        }
+
+        false
     }
     fn all_references(&self) -> impl Iterator<Item = Symbol> {
         (0..self.references.len()).map(Symbol::Reference)
@@ -194,6 +221,30 @@ impl Ast {
             .chain(self.all_attributes())
             .chain(self.all_references())
             .find(|s| self.span(*s).unwrap().contains(&offset))
+    }
+    fn find_all_of(&self, current: Symbol, name: Ustr) -> Vec<Symbol> {
+        let mut relatives: Vec<Symbol> = vec![];
+        if let Symbol::Feature(x) = current {
+            if let Some(feature) = self.get_feature(x) {
+                if feature.name.name == name {
+                    relatives.push(Symbol::Feature(x));
+                    return relatives;
+                }
+            }
+        }
+        // Go through Children
+        match self.structure.children.get(&current) {
+            Some(list) => {
+                for sym in list {
+                    relatives.append(self.find_all_of(sym.to_owned(), name).as_mut())
+                }
+            }
+            None => {
+                // info!("Relative Symbol {:?} has no children", from);
+            }
+        }
+
+        return relatives;
     }
 }
 //Combines the AST with metadata, this is also a public interface to the AST.
@@ -241,8 +292,20 @@ impl AstDocument {
     pub fn all_features(&self) -> impl Iterator<Item = Symbol> {
         self.ast.all_features()
     }
+    pub fn get_feature(&self, index: usize) -> Option<&Feature> {
+        self.ast.get_feature(index)
+    }
+    pub fn containe_feature(&self, name: Ustr) -> bool {
+        self.ast.containe_feature(name)
+    }
+    pub fn get_attribute(&self, index: usize) -> Option<&Attribute> {
+        self.ast.get_attribute(index)
+    }
     pub fn all_attributes(&self) -> impl Iterator<Item = Symbol> {
         self.ast.all_attributes()
+    }
+    pub fn containe_attribute(&self, name: Ustr) -> bool {
+        self.ast.containe_attribute(name)
     }
     pub fn all_references(&self) -> impl Iterator<Item = Symbol> {
         self.ast.all_references()
@@ -294,6 +357,9 @@ impl AstDocument {
             .into_iter()
             .flat_map(|i| i.iter())
             .cloned()
+    }
+    pub fn get_reference(&self, index: usize) -> Option<&Reference> {
+        self.ast.references.get(index)
     }
     pub fn lsp_range(&self, sym: Symbol) -> Option<tower_lsp::lsp_types::Range> {
         self.ast.lsp_range(sym, &self.source)
@@ -388,6 +454,26 @@ impl AstDocument {
                 }
             })
         })
+    }
+    // returns all Symbols with same name, used for cardinality resolving
+    pub fn get_all_entities(&self, path: &[Ustr]) -> Vec<Symbol> {
+        let ustr_path = Ustr::from(path.iter().map(|s| s.to_string()).join(".").as_str());
+        let mut res = vec![];
+        for i in 0..self.ast.features.len() {
+            if ustr_path == self.get_feature(i).unwrap().name.name {
+                res.push(Symbol::Feature(i));
+            }
+        }
+        let mut path: Vec<Ustr> = path.iter().cloned().collect();
+        if let Some(name) = path.pop() {
+            let features = self.get_all_entities(&path);
+            for i in features {
+                if let Some(sym) = self.ast.index.get(&(i, name, SymbolKind::Attribute)) {
+                    res.push(*sym);
+                }
+            }
+        }
+        res
     }
     //prefix of sym from root
     pub fn prefix(&self, mut sym: Symbol) -> Vec<Ustr> {
@@ -488,7 +574,9 @@ impl AstDocument {
     ) {
         self.visit_children_depth(root, merge_root_features, |sym, _| f(sym));
     }
-
+    pub fn find_all_of(&self, name: Ustr) -> Vec<Symbol> {
+        self.ast.find_all_of(Symbol::Root, name)
+    }
     //Iterate all named symbole under root
     pub fn visit_children_depth<F: FnMut(Symbol, u32) -> bool>(
         &self,

@@ -3,6 +3,7 @@ use compact_str::CompactString;
 use hashbrown::HashMap;
 use itertools::{Either, Itertools};
 use log::info;
+use regex::Regex;
 use ropey::Rope;
 use std::cmp::Ordering;
 use std::ops::Add;
@@ -519,7 +520,7 @@ impl From<Type> for CompletionKind {
     fn from(s: Type) -> Self {
         match s {
             Type::Bool => Self::Feature,
-            Type::String => Self::AttributeNumber,
+            Type::String => Self::Feature,
             Type::Namespace => Self::Import,
             Type::Real => Self::AttributeNumber,
             Type::Attributes => Self::AttributeAttributes,
@@ -577,10 +578,11 @@ fn add_keywords<const I: usize>(
     w: f32,
     words: [CompactString; I],
 ) {
+    let regex = Regex::new(r"\$\d+|\$\{\d+:.+}").unwrap();
     for word in words {
         top.push(CompletionOpt {
             op: TextOP::Put(word.clone()),
-            label: word.clone(),
+            label: regex.replace_all(word.clone().as_mut_str(), "").into(),
             rank: if query.is_empty() {
                 w
             } else {
@@ -598,10 +600,10 @@ fn add_top_lvl_keywords(query: &str, top: &mut TopN<CompletionOpt>, w: f32) {
         w,
         [
             "namespace".into(),
-            "features".into(),
-            "imports".into(),
-            "constraints".into(),
-            "include".into(),
+            "features\n\t".into(),
+            "imports\n\t".into(),
+            "constraints\n\t".into(),
+            "include\n\t".into(),
         ],
     );
 }
@@ -612,17 +614,22 @@ fn add_group_keywords(query: &str, top: &mut TopN<CompletionOpt>, w: f32) {
         top,
         w,
         [
-            "or".into(),
-            "optional".into(),
-            "mandatory".into(),
-            "alternative".into(),
+            "or\n\t".into(),
+            "optional\n\t".into(),
+            "mandatory\n\t".into(),
+            "alternative\n\t".into(),
         ],
     );
 }
 fn add_lang_lvl_major_keywords(query: &str, top: &mut TopN<CompletionOpt>, w: f32) {
-    add_keywords(query, top, w, ["SMT-level".into(), "SAT-level".into(), "TYPE-level".into()]);
+    add_keywords(
+        query,
+        top,
+        w,
+        ["Boolean".into(), "Arithmetic".into(), "Type".into()],
+    );
 }
-fn add_lang_lvl_smt(query: &str, top: &mut TopN<CompletionOpt>, w: f32) {
+fn add_lang_lvl_arithmetic(query: &str, top: &mut TopN<CompletionOpt>, w: f32) {
     add_keywords(
         query,
         top,
@@ -647,7 +654,7 @@ fn add_lang_lvl_type(query: &str, top: &mut TopN<CompletionOpt>, w: f32) {
     );
 }
 
-fn add_lang_lvl_sat(query: &str, top: &mut TopN<CompletionOpt>, w: f32) {
+fn add_lang_lvl_boolean(query: &str, top: &mut TopN<CompletionOpt>, w: f32) {
     add_keywords(query, top, w, ["group-cardinality".into(), "*".into()]);
 }
 
@@ -657,18 +664,30 @@ fn add_logic_op(query: &str, top: &mut TopN<CompletionOpt>, w: f32) {
         top,
         w,
         [
-            "&".into(),
-            "|".into(),
-            "=>".into(),
-            "<=>".into(),
-            ">".into(),
-            "<".into(),
-            "==".into(),
+            "& ".into(),
+            "| ".into(),
+            "=> ".into(),
+            "<=> ".into(),
+            "> ".into(),
+            "< ".into(),
+            "== ".into(),
         ],
     );
 }
 fn add_function_keywords(query: &str, top: &mut TopN<CompletionOpt>, w: f32) {
-    add_keywords(query, top, w, ["sum".into(), "avg".into(), "len".into(), "floor".into(), "ceil".into()]);
+    add_keywords(
+        query,
+        top,
+        w,
+        [
+            "sum($1) ".into(),
+            "avg($1) ".into(),
+            "len($1) ".into(),
+            "floor($1) ".into(),
+            "ceil($1) ".into(),
+            "!".into(),
+        ],
+    );
 }
 fn make_relativ_path(path: &[CompactString], origin: &[CompactString]) -> Option<CompactString> {
     if path.len() > origin.len() {
@@ -941,18 +960,35 @@ fn compute_completions_impl(
                 //heuristic to provide nearly correct predictions, to
                 //make it more accurate we need to respect
                 //parenthesis
-                (CompletionEnv::Feature, CompletionOffset::SameLine) => {
-                    add_keywords(&ctx.postfix, &mut top, 2.0, ["cardinality".into()]);
-                }
-
-                (CompletionEnv::Feature, CompletionOffset::Cut) => {
-                    add_keywords(
-                        &ctx.postfix,
-                        &mut top,
-                        2.0,
-                        ["Integer".into(), "String".into(), "Real".into()],
-                    );
-                    completion_symbol(&snapshot, origin, &ctx, &mut top);
+                (CompletionEnv::Feature, offset) => {
+                    if matches!(
+                        offset,
+                        CompletionOffset::SameLine | CompletionOffset::Continuous
+                    ) {
+                        add_keywords(
+                            &ctx.postfix,
+                            &mut top,
+                            2.0,
+                            ["cardinality [${1:0..1}] ".into()],
+                        );
+                    }
+                    if matches!(offset, CompletionOffset::Continuous | CompletionOffset::Cut) {
+                        add_keywords(
+                            &ctx.postfix,
+                            &mut top,
+                            2.0,
+                            [
+                                "Integer ".into(),
+                                "String ".into(),
+                                "Real ".into(),
+                                "Boolean".into(),
+                            ],
+                        );
+                        completion_symbol(&snapshot, origin, &ctx, &mut top);
+                    }
+                    if matches!(offset, CompletionOffset::Dot) {
+                        completion_symbol(&snapshot, origin, &ctx, &mut top);
+                    }
                 }
                 (
                     CompletionEnv::Constraint | CompletionEnv::Numeric,
@@ -995,9 +1031,9 @@ fn compute_completions_impl(
         CompletionEnv::Include => {
             if !ctx.prefix.is_empty() {
                 match ctx.prefix[0].as_str() {
-                    "SAT-level" => add_lang_lvl_sat(&ctx.postfix, &mut top, 2.0),
-                    "SMT-level" => add_lang_lvl_smt(&ctx.postfix, &mut top, 2.0),
-                    "TYPE-level" => add_lang_lvl_type(&ctx.postfix, &mut top, 2.0),
+                    "Boolean" => add_lang_lvl_boolean(&ctx.postfix, &mut top, 2.0),
+                    "Arithmetic" => add_lang_lvl_arithmetic(&ctx.postfix, &mut top, 2.0),
+                    "Type" => add_lang_lvl_type(&ctx.postfix, &mut top, 2.0),
                     _ => {}
                 }
             } else {
@@ -1089,6 +1125,7 @@ pub fn compute_completions(
                     CompletionKind::Folder => CompletionItemKind::FOLDER,
                     _ => CompletionItemKind::TEXT,
                 }),
+                insert_text_format: Some(InsertTextFormat::SNIPPET),
                 ..Default::default()
             })
             .collect();

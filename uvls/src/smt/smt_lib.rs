@@ -7,6 +7,7 @@ use regex::Regex;
 use std::fmt::Display;
 use std::fmt::Write;
 use tokio::time::Instant;
+use ustr::Ustr;
 #[derive(Clone, Debug)]
 pub enum AssertName {
     Config,
@@ -33,7 +34,7 @@ impl Display for AssertName {
             Self::GroupMin => write!(f, "lower bound"),
             Self::GroupMax => write!(f, "upper bound"),
             Self::GroupMember => write!(f, "group member"),
-            Self::RootFeature => write!(f, "root feature ar always required"),
+            Self::RootFeature => write!(f, "root feature are always required"),
         }
     }
 }
@@ -165,7 +166,6 @@ impl SMTModule {
         (define-fun floor ((x Real)) Int (to_int x))
         (define-fun ceil ((x Real)) Int (ite (= (to_int x) x) (to_int x) (to_int (+ x 1)) ))
         (set-option :smt.core.minimize true)\n"
-
             .to_string();
         out
     }
@@ -304,13 +304,10 @@ impl SMTModule {
                                 stack.push(CExpr::Expr(i));
                             }
                         }
-                        Expr::Strlen(e)
-                            | Expr::Ceil(e)
-                            | Expr::Floor(e)
-                            | Expr::Not(e) => {
-                                stack.push(CExpr::End);
-                                stack.push(CExpr::Expr(e));
-                            }
+                        Expr::Strlen(e) | Expr::Ceil(e) | Expr::Floor(e) | Expr::Not(e) => {
+                            stack.push(CExpr::End);
+                            stack.push(CExpr::Expr(e));
+                        }
                         Expr::StrConcat(rhs, lhs) => {
                             stack.push(CExpr::End);
                             stack.push(CExpr::Expr(rhs));
@@ -394,11 +391,78 @@ impl<'a> SMTBuilder<'a> {
         }
     }
     fn clause(&self, g: ModuleSymbol) -> Vec<Expr> {
-        self.module
+        let file = self
+            .module
+            .instances()
+            .filter(|(id, _)| id == &g.instance)
+            .map(|(_, f)| f)
+            .collect::<Vec<&AstDocument>>()[0];
+
+        let mut cardinalitys: HashMap<Ustr, (Cardinality, Vec<Symbol>)> = HashMap::from([]);
+        // Cardinality
+        let card_expressions = self
+            .module
             .file(g.instance)
             .direct_children(g.sym)
+            .filter(|i| {
+                if let Symbol::Feature(index) = i {
+                    let feature = file.get_feature(index.clone()).unwrap();
+                    match feature.cardinality {
+                        Some(Cardinality::Range(_, _)) => {
+                            if !cardinalitys.contains_key(&feature.name.name) {
+                                cardinalitys.insert(
+                                    feature.name.name,
+                                    (
+                                        feature.clone().cardinality.unwrap(),
+                                        vec![Symbol::Feature(index.clone())],
+                                    ),
+                                );
+                            } else {
+                                cardinalitys
+                                    .get_mut(&feature.name.name)
+                                    .unwrap()
+                                    .1
+                                    .push(Symbol::Feature(index.clone()));
+                            }
+                            return true;
+                        }
+                        _ => return false,
+                    }
+                }
+                return false;
+            })
+            .collect::<Vec<Symbol>>();
+
+        let mut result = self
+            .module
+            .file(g.instance)
+            .direct_children(g.sym)
+            .filter(|s| !card_expressions.contains(s))
             .map(|i| self.pseudo_bool(g.instance.sym(i)))
-            .collect()
+            .collect::<Vec<Expr>>();
+
+        result.append(
+            cardinalitys
+                .values()
+                .into_iter()
+                .map(|(card, syms)| {
+                    let list = syms
+                        .into_iter()
+                        .map(|i| self.pseudo_bool(g.instance.sym(i.clone())))
+                        .collect::<Vec<Expr>>();
+                    match card {
+                        Cardinality::Range(min, max) => Expr::And(vec![
+                            Expr::AtLeast(min.clone(), list.clone()),
+                            Expr::AtMost(max.clone(), list),
+                        ]),
+                        _ => panic!(),
+                    }
+                })
+                .collect::<Vec<Expr>>()
+                .as_mut(),
+        );
+
+        return result;
     }
     fn min_assert(&mut self, min: usize, p_bind: &Expr, g: ModuleSymbol) {
         let clause = self.clause(g);
@@ -425,6 +489,7 @@ impl Into<Expr> for ConfigValue {
             Self::Bool(b) => Expr::Bool(b),
             Self::Number(n) => Expr::Real(n),
             Self::String(s) => Expr::String(s),
+            Self::Cardinality(_) => Expr::Bool(true),
         }
     }
 }
@@ -440,6 +505,50 @@ pub fn uvl2smt(module: &Module, config: &HashMap<ModuleSymbol, ConfigValue>) -> 
     for (m, file) in module.instances() {
         for f in file.all_features() {
             builder.push_var(m.sym(f));
+        }
+
+        for sym_feature in file.all_features() {
+            if let Symbol::Feature(id) = sym_feature {
+                let feature = file.get_feature(id).unwrap().clone();
+                if let Cardinality::Range(min, _) =
+                    feature.cardinality.unwrap_or_else(|| Cardinality::Fixed)
+                {
+                    // Make AtLeast assertion for cardinality feature
+                    if feature.first_cardinality_child {
+                        let mut list = vec![];
+                        let parent = file.parent(sym_feature, false).unwrap();
+
+                        for child in file.direct_children(parent) {
+                            if let Symbol::Feature(sibling_id) = child {
+                                let sibling = file.get_feature(sibling_id);
+                                if sibling.unwrap().name.name.as_str() == feature.name.name.as_str()
+                                {
+                                    list.push(builder.var(m.sym(Symbol::Feature(sibling_id))));
+                                }
+                            }
+                        }
+
+                        match file.parent(Symbol::Feature(id), false) {
+                            Some(Symbol::Group(_)) => {
+                                // if parent is group, a cardinality can be atleast 0 or min, since it can not be selected at all.
+                                builder.assert.push(Assert(
+                                    Some(AssertInfo(m.sym(sym_feature), AssertName::GroupMin)),
+                                    Expr::Or(vec![
+                                        Expr::AtLeast(min, list.clone()),
+                                        Expr::AtMost(0, list),
+                                    ]),
+                                ));
+                            }
+                            _ => {
+                                builder.assert.push(Assert(
+                                    Some(AssertInfo(m.sym(sym_feature), AssertName::GroupMin)),
+                                    Expr::AtLeast(min, list),
+                                ));
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
     //set config features
@@ -519,22 +628,15 @@ pub fn uvl2smt(module: &Module, config: &HashMap<ModuleSymbol, ConfigValue>) -> 
                         builder.max_assert(1, &p_bind, m.sym(g));
                     }
                     GroupMode::Mandatory => {
-                        for c in file.direct_children(g) {
-                            let c_bind = builder.pseudo_bool(m.sym(c));
+                        builder.clause(m.sym(g)).into_iter().for_each(|expr| {
+                            info!("expr {:?}", expr);
                             builder.assert.push(Assert(
-                                Some(AssertInfo(m.sym(c), AssertName::GroupMember)),
-                                Expr::Equal(vec![c_bind.into(), p_bind.clone().into()]),
+                                Some(AssertInfo(m.sym(p), AssertName::GroupMember)),
+                                Expr::Equal(vec![expr.into(), p_bind.clone().into()]),
                             ))
-                        }
+                        });
                     }
-                    GroupMode::Optional | GroupMode::Cardinality(Cardinality::Any) => {}
-                    GroupMode::Cardinality(Cardinality::Max(max)) => {
-                        builder.max_assert(max, &p_bind, m.sym(g));
-                    }
-
-                    GroupMode::Cardinality(Cardinality::From(min)) => {
-                        builder.min_assert(min, &p_bind, m.sym(g));
-                    }
+                    GroupMode::Optional | GroupMode::Cardinality(Cardinality::Fixed) => {}
                     GroupMode::Cardinality(Cardinality::Range(min, max)) => {
                         builder.min_assert(min, &p_bind, m.sym(g));
                         builder.max_assert(max, &p_bind, m.sym(g));
@@ -557,7 +659,7 @@ pub fn uvl2smt(module: &Module, config: &HashMap<ModuleSymbol, ConfigValue>) -> 
     //encode constraints
     for (m, file) in module.instances() {
         for c in file.all_constraints() {
-            let expr = translate_constraint(file.constraint(c).unwrap(), m, &mut builder);
+            let expr = translate_constraint(file.constraint(c).unwrap(), m, &mut builder, file);
             builder.assert.push(Assert(
                 Some(AssertInfo(m.sym(c), AssertName::Constraint)),
                 expr,
@@ -593,7 +695,7 @@ pub fn uvl2smt_constraints(module: &Module) -> SMTModule {
                     return true;
                 }
                 let ms = m.sym(a);
-                 builder.push_var(ms);
+                builder.push_var(ms);
                 true
             });
         }
@@ -601,7 +703,7 @@ pub fn uvl2smt_constraints(module: &Module) -> SMTModule {
     //encode constraints
     for (m, file) in module.instances() {
         for c in file.all_constraints() {
-            let expr = translate_constraint(file.constraint(c).unwrap(), m, &mut builder);
+            let expr = translate_constraint(file.constraint(c).unwrap(), m, &mut builder, file);
             builder.assert.push(Assert(
                 Some(AssertInfo(m.sym(c), AssertName::Constraint)),
                 expr,
@@ -613,22 +715,38 @@ pub fn uvl2smt_constraints(module: &Module) -> SMTModule {
         asserts: builder.assert,
     }
 }
+
 fn translate_constraint(
     decl: &ast::ConstraintDecl,
     m: InstanceID,
     builder: &mut SMTBuilder,
+    ast: &AstDocument,
 ) -> Expr {
     match &decl.content {
-        ast::Constraint::Ref(sym) => builder.var(m.sym(*sym)),
+        ast::Constraint::Ref(sym) => {
+            let module_symbol: ModuleSymbol = builder.module.resolve_value(m.sym(*sym));
+            match module_symbol.sym {
+                Symbol::Feature(x) => {
+                    let all_of = ast
+                        .find_all_of(ast.name(Symbol::Feature(x)).unwrap())
+                        .into_iter()
+                        .map(|feature| builder.var(m.sym(feature)))
+                        .collect::<Vec<Expr>>();
+                    return Expr::Or(all_of);
+                }
+                _ => (),
+            }
+            builder.var(m.sym(*sym))
+        }
         ast::Constraint::Not(lhs) => stacker::maybe_grow(32 * 1024, 1024 * 1024, || {
-            Expr::Not(translate_constraint(lhs, m, builder).into())
+            Expr::Not(translate_constraint(lhs, m, builder, ast).into())
         }),
         ast::Constraint::Constant(b) => Expr::Bool(*b),
         ast::Constraint::Logic { op, lhs, rhs } => {
             let lhs = stacker::maybe_grow(32 * 1024, 1024 * 1024, || {
-                translate_constraint(lhs, m, builder)
+                translate_constraint(lhs, m, builder, ast)
             });
-            let rhs = translate_constraint(rhs, m, builder);
+            let rhs = translate_constraint(rhs, m, builder, ast);
             match op {
                 ast::LogicOP::Or => Expr::Or(vec![lhs, rhs]),
                 ast::LogicOP::And => Expr::And(vec![lhs, rhs]),
@@ -721,14 +839,12 @@ fn translate_expr(decl: &ast::ExprDecl, m: InstanceID, builder: &mut SMTBuilder)
                 )
             }
         }
-        ast::Expr::Integer { op, n} => {
-           (
-                match op {
-                    ast::IntegerOP::Ceil => Expr::Ceil(translate_expr(n, m, builder).0.into()),
-                    ast::IntegerOP::Floor => Expr::Floor(translate_expr(n, m, builder).0.into())
-                },
-                Type::Real,
-            )
-        }
+        ast::Expr::Integer { op, n } => (
+            match op {
+                ast::IntegerOP::Ceil => Expr::Ceil(translate_expr(n, m, builder).0.into()),
+                ast::IntegerOP::Floor => Expr::Floor(translate_expr(n, m, builder).0.into()),
+            },
+            Type::Real,
+        ),
     }
 }

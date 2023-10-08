@@ -744,6 +744,21 @@
     }
   },
   {
+    "type": "type",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": false,
+      "required": false,
+      "types": [
+        {
+          "type": "name",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
     "type": "typed_feature",
     "named": true,
     "fields": {
@@ -762,7 +777,7 @@
         "required": true,
         "types": [
           {
-            "type": "name",
+            "type": "type",
             "named": true
           }
         ]
@@ -930,6 +945,10 @@
     "named": false
   },
   {
+    "type": "Arithmetic",
+    "named": false
+  },
+  {
     "type": "Boolean",
     "named": false
   },
@@ -942,19 +961,11 @@
     "named": false
   },
   {
-    "type": "SAT-level",
-    "named": false
-  },
-  {
-    "type": "SMT-level",
-    "named": false
-  },
-  {
     "type": "String",
     "named": false
   },
   {
-    "type": "TYPE-level",
+    "type": "Type",
     "named": false
   },
   {
